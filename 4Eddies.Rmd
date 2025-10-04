@@ -1,0 +1,1120 @@
+---
+title: "4 Eddies"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggalt)
+library(broom)
+library(agricolae) 
+library(ggpubr)
+library(tidyr)
+library(rstatix)
+library(broom)
+library(openxlsx)
+mycols <- c("#F96E46", "#506E96","#B185A7", "#94D2BD","#3A2449", "#C28743","#94C595", "#901462", "#183620", "#FFE3E3",  "#60935D", "navyblue", "red4","orangered2")
+
+theme_set(theme_classic()+ theme(panel.grid.major = element_blank(), 
+                                 panel.grid.minor = element_blank(),
+                                 axis.title.x = element_text(size = 14, color='black', face = "bold" ),
+                                 plot.subtitle = element_text(size = 14, color = "black", face = "bold"),
+                                 axis.text = element_text(size = 12, color='black'),
+                                 axis.title.y = element_text(size = 14, color='black', face = "bold" ),
+                                 
+                                 strip.text = element_text(size = 14)))
+
+#Filtering lists 
+#for looking only at Fish
+rem <- c("LCRUST","CEPHA","SCRUST", "SCALE", "HOUSE", "AMPHI", "JELLY", "MISC", "MISC ","HETERO", "PYRO", "CHAET", "WORM", "SALP", "MOLLUSC", "ISOPOD", NA)
+#We remove the following morpho groups when calculating NBSS 
+# SCALE - fish scales
+# HOUSE - parasitic phronima house
+# JELLY - jellyfish which are often fragmented 
+# MISC - fragmented organism parts
+rem2 <- c("SCALE", "HOUSE",  "JELLY",   "MISC",  "MISC ", NA)
+
+```
+
+Set all of your dataframes here
+these will be used below at various times.
+```{r}
+DF <- read.xlsx("2025-04-07_4Eddies.xlsx")
+Zoo <- read.csv("Zooplankton_Biomass.csv")
+SIA <-  read.csv("Alleddies_SIA_TL.csv") #Stable Isotope data for 13C and 15N
+
+```
+
+General data set filtering 
+
+```{r}
+
+DF_Fish <- DF %>% filter(!MorphoSpecies_Corrected %in% rem) 
+DF_Fish$Family[is.na(DF_Fish$Family)]<- "Unidentified Fish" #This renames fish without a morpho grouping as UnID
+DF_Fish$Species[is.na(DF_Fish$Species)]<- "Unidentified Species"
+
+```
+
+Biomass plotting for Fish and Zooplankton, including family/species breakdowns for Fish
+```{r}
+#### Biomass Plot ####
+
+### NOT INCLUDING FISHES > 8G AS THEY WILL BE UNDERSAMPLED
+DF_Fish %>% #filter(!WC %in% c("8-16", "16-32", "32-64", "64-128", "FALSE",NA)) %>% 
+  group_by(SampleID, Water_mass) %>% 
+  summarize(Abund = sum(abund.m3, na.rm = TRUE),
+            Biom = sum(ww.gm3, na.rm = TRUE)) %>% ungroup() %>% 
+  group_by(Water_mass) %>%
+  summarize(mAbund = mean(Abund, na.rm = TRUE),
+            mBiom = mean(Biom, na.rm = TRUE), 
+            n=length(unique(SampleID)))
+
+
+#Specifically looking at organisms 0.5 - 8 g wet weight
+bDF1 <- DF_Fish %>% filter(!WC %in% c("8-16", "16-32", "32-64", "64-128", "FALSE",NA)) %>% 
+  group_by(SampleID, Water_mass, ) %>% 
+  summarize(Abund = sum(abund.m3, na.rm = TRUE),
+            Biom.mg = sum(ww.gm3*1000, na.rm = TRUE)) %>% ungroup() 
+
+bDF <- bDF1 %>% group_by(Water_mass) %>%
+  summarize(mAbund = mean(Abund, na.rm = TRUE),
+            mBiom.mg = mean(Biom.mg, na.rm = TRUE), 
+            N=length(unique(SampleID)), 
+            SD=sd(Biom.mg, na.rm = TRUE),
+            sem = SD/sqrt(N))  #%>% filter(`D/N` == "n")
+
+
+bDF$Tax <- "Fish"
+
+ZooBiom <- Zoo %>% group_by(WM) %>% 
+  summarize(mBiom.mg = sum(biomass))
+
+ZooBiom$sem <- 0
+ZooBiom$Tax <-   "Zooplankton"
+
+Fish<-bDF %>% select(Water_mass, mBiom.mg, sem, Tax)
+
+BioFish <- ggplot() +
+  geom_col(data = bDF, aes(Water_mass, mBiom.mg))+
+  labs(y = expression('Mean Biomass(mg'~m ^-3~')'), x = "")+
+  #scale_fill_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  geom_errorbar(data = bDF, aes(x = Water_mass, ymin= mBiom.mg-sem, ymax = mBiom.mg+sem, width=0.5))+ # Why wont this work!!!!
+  #facet_wrap(~Group)+
+  scale_y_continuous(labels = c(0,2,4,6,8), breaks = c(0,2,4,6,8)) +
+  theme(legend.position = "none")+
+  theme(strip.background = element_blank())+
+  xlab("Water Mass")
+
+
+BioZoo <- ggplot() +
+  geom_col(data = ZooBiom,aes(WM, mBiom.mg))+
+  labs(y = expression('Biomass(mg'~m ^-3~')'), x = "")+
+  #scale_fill_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  #geom_errorbar(data = plotdat_fish, aes(x = WM, ymin= MeanBio, ymax = MeanBio+SD))+ # Why wont this work!!!!
+  #facet_wrap(~Group)++
+  scale_y_continuous(labels = c(0,20,40,60,80,100), breaks = c(0,20,40,60,80,100))+
+  theme(legend.position = "none")+
+  theme(strip.background = element_blank())+
+  xlab("Water Mass")
+
+## This is Figure 4
+ggarrange(BioZoo,BioFish, 
+          labels = c("A", "B"),
+          label.x = 0.2, label.y = 0.96,
+          ncol = 2, nrow = 1, 
+          align = "hv")
+
+
+####################################################################################################################################
+##################### TEST FOR STATISTICAL DIFFERENCES IN FISH BIOMASS BETWEEN NCC, NWC, SWC. Remove the SCC as it lacks a replicate
+FishTest<-bDF1 %>% filter(Water_mass != "SCC")
+fish.bio.aov <- aov(Biom.mg~Water_mass, data = FishTest)
+summary(fish.bio.aov) 
+
+model.metrics <- augment(fish.bio.aov) %>%
+  select(-.hat, -.sigma, -.fitted) # Remove details
+
+shapiro_test(model.metrics$.resid) # not significant meets normality
+bartlett.test(Biom.mg~Water_mass, data = FishTest) 
+
+
+####################################################################################################################################
+##Below gives us the number of unique species observed, but does not account for abundances AT ALL. 
+UnSpp<- DF_Fish   %>%   
+  select(Water_mass,MorphoSpecies_Corrected, Family, Species, WC) %>% 
+  filter(MorphoSpecies_Corrected %in% c("DBFISH","FISH","HATCH","LARV",
+                                        "LEPTO",  "LGFISH",'MYCFATTY', 'MYCTO',"NANNO", 
+                                        "SCOPE","SHARK","SLEND","TOOTH")) %>% 
+  select(Water_mass, Family, Species, WC) %>%
+  unique()
+
+UnSpp %>% group_by(Water_mass) %>% 
+  summarise(nFam=n_distinct(Family),
+            nSpp=n_distinct(Species))
+
+
+## Here we calculate the proportional abundance by Family within each water mass
+SppList<- DF_Fish  %>% 
+  select("Water_mass", "Family", "Species") %>% distinct_all()
+SppList$Obs <- 1
+
+SL1 <- SppList %>% 
+  spread(Water_mass, value = Obs)
+
+mtx<-DF_Fish %>% 
+  select("SampleID","Water_mass", "Family", "Species", "abund.m3") %>% group_by(SampleID, Water_mass, Family) %>% 
+  summarize(totalA = sum(abund.m3, na.rm = TRUE))%>% 
+  group_by(Water_mass, Family) %>% 
+  summarise(TAbund = mean(totalA)) %>% 
+  select(Water_mass, Family, TAbund) %>%
+  pivot_wider(names_from=Water_mass, values_from=TAbund, values_fill=0)
+
+mtx[2:5]<-prop.table(as.matrix(mtx[2:5]),margin = 2) ## Table S-5
+
+
+
+
+
+####################################################################################################################################
+##################### LOOK AT FISH SPECIES/FAMILY COMPOSITION ######################################################################
+####################################################################################################################################
+
+## This is Supplemental Figure S-1
+
+################## BY MORPHOSPECIES
+SppComp<-DF_Fish %>% filter(!WC %in% c("8-16", "16-32", "32-64", "64-128", "FALSE",NA)) %>% filter(!MorphoSpecies_Corrected %in% rem) %>%
+  #filter(MorphoSpecies_Corrected== "MYCTO") %>%
+  group_by(SampleID, Water_mass,MorphoSpecies_Corrected, Family, Species) %>% 
+  summarize(Abund = sum(abund.m3, na.rm = TRUE),
+            Biom = sum(ww.gm3, na.rm = TRUE)) %>% ungroup() %>% 
+  group_by(Water_mass,  MorphoSpecies_Corrected, Family, Species) %>%
+  summarize(mAbund = mean(Abund, na.rm = TRUE),
+            mBiom = mean(Biom, na.rm = TRUE), 
+            n=length(unique(SampleID))) 
+
+SppComp 
+SppComp$Family[is.na(SppComp$Family)]<- "Unidentified Fish"
+
+####% contribution to total biomass by family and the fish species. 
+#Family
+pA<- SppComp %>% group_by(Water_mass, Family) %>% 
+  summarize(MeanBiomass = sum(mBiom, na.rm = TRUE)*1000) %>% 
+  ggplot(aes(x = Water_mass, y = MeanBiomass, fill = Family))+
+  geom_col(position = "fill") +
+  labs(y = "Mean % total fish biomass", x = "Water mass")#7.5 x 5
+
+#Species
+pB<- SppComp %>% filter(Family == "Myctophidae") %>% 
+  group_by(Water_mass, Species) %>% 
+  summarize(MeanBiomass = sum(mBiom, na.rm = TRUE)*1000)  %>% 
+  ggplot(aes(x = Water_mass, y = MeanBiomass, fill = Species))+
+  geom_col(position = "fill")+
+  labs(y = "Mean % total myctophid biomass", x = "Water mass")
+
+cowplot::plot_grid(pA, pB, nrow = 2, align = "hv") # Appendix figure
+  
+```
+
+Normalised Biomass Size Spectra - plotting and statistical test. 
+```{r}
+####NBSS####
+
+################################  Now looking at NBSS: ####################################
+## NBSS looks at the entire community rather than just fish. However, we remove fragments of organisms from the data set prior to plotting.
+## i.e., gelatinous organisms and miscellaneous (i.e., scales, organic matter) 
+
+## Summarize data set by tow and water mass
+DF4 <- DF %>% filter(!MorphoSpecies_Corrected %in% rem2) %>% 
+  group_by(SampleID,  Water_mass , WC) %>% 
+  summarize(Abund = sum(abund.m3, na.rm = TRUE),
+            WW.gm3 = sum(ww.gm3, na.rm = TRUE)) %>% 
+  filter(WC != "#NUM!") %>% filter(WC != FALSE) %>% ungroup() %>% 
+  group_by(Water_mass , WC) %>%
+  summarize(mAbund = mean(Abund, na.rm = TRUE),
+            mBiom = mean(WW.gm3, na.rm = TRUE))
+
+unique(DF4$WC)
+#### Calculating normalised biomass - i.e., determine width of each size bin
+DF4$WC_width <- NA
+DF4$WC_width <- ifelse(DF4$WC == "0-0.5", 0.5, (ifelse(DF4$WC == "0.5-1", 0.5, 
+                               (ifelse(DF4$WC == "1-2", 1, 
+                                       (ifelse(DF4$WC == "2-4", 2,
+                                               (ifelse(DF4$WC == "4-8", 4,
+                                                       (ifelse(DF4$WC == "8-16", 8, 
+                                                               (ifelse(DF4$WC == "32-64", 32, 
+                                                                       (ifelse(DF4$WC == "16-32", 16, FALSE)))))))))))))))
+
+DF4$Norm_Bio_gm3 <- DF4$mBiom/DF4$WC_width
+
+## Adding the log2 size bins for each of the weight classes for NBSS plot. We exclude organisms > 32 g wet weight
+DF4$Log2Size <- NA
+DF4$Log2Size <- ifelse(DF4$WC == "0-0.5", -2,
+                       (ifelse(DF4$WC == "0.5-1", -0.415, 
+                               (ifelse(DF4$WC == "1-2", 0.585, 
+                                       (ifelse(DF4$WC == "2-4", 1.585,
+                                               (ifelse(DF4$WC == "4-8", 2.585,
+                                                       (ifelse(DF4$WC == "8-16", 3.585, 
+                                                               (ifelse(DF4$WC == "32-64", 4.585, 
+                                                                       (ifelse(DF4$WC == "16-32", 5.585, FALSE)))))))))))))))
+
+
+
+
+
+DF4$Group <- "Fish"
+
+## Bind Zooplankton data - this is raw estimates of zooplankton biomass from size-fractionation. Each size class was dried in an oven and then weighed. 
+## Dry weights were converted to wet weights assuming a DW:WW conversion of 0.171 from Young et al. 1996
+
+NBSS_zoo <- Zoo %>% select(WM, SC, NormBio, Log2Size, Group) 
+
+names(NBSS_zoo)<-c("Water_mass", "WC",  "Norm_Bio_gm3", "Log2Size", "Group")
+DF5<-DF4[c("Water_mass", "WC",  "Norm_Bio_gm3", "Log2Size", "Group")]
+
+DF6<-rbind(DF5, NBSS_zoo)
+DF6 <- DF6 %>% filter(Norm_Bio_gm3 != Inf)
+
+# NBSS PLOT #5
+ggplot(data = DF6, aes(Log2Size, log2(Norm_Bio_gm3), colour = Water_mass))+
+  geom_rect(aes(xmin = -Inf, xmax = -4, ymin = -Inf, ymax = Inf), colour = "White", fill = "#EBEBEB", alpha = 1)+
+  geom_smooth(method = "lm", se = FALSE, linetype ="dashed", aes(Colour = Group), size = 1, alpha = 0.5, lwd = 0.75)+
+  geom_smooth(method = "lm", se = FALSE, alpha = 0.5, lwd = 0.75)+
+  geom_point(aes(shape=Water_mass),position = position_jitter(width = 0.1, height = 0.1), size = 3, alpha = 0.7)+
+  scale_shape_manual(values = c(16, 16, 17, 17)) +
+  scale_colour_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  labs(x = "Log2 Body Size (g)", y = "Log2 Normalised Biomass")
+
+####################################################################################################################################
+############ STAT TESTING DIFFERENCES IN NBSS
+
+      NWCnbss <- filter(DF6, Water_mass == "NWC")
+      NCCnbss <- filter(DF6, Water_mass == "NCC")
+      SCCnbss <- filter(DF6, Water_mass == "SCC")
+      SWCnbss <- filter(DF6, Water_mass == "SWC")
+      
+      NCC_NBSSmodel <- lm(log(Norm_Bio_gm3 ,2)~Log2Size, data = NCCnbss) 
+      nccNBSSint <- coef(NCC_NBSSmodel)[1] 
+      nccNBSS_slope <- coef(NCC_NBSSmodel)[2]
+      summary(NCC_NBSSmodel) #Rsquared 0.98
+      
+      NWC_NBSSmodel <- lm(log(Norm_Bio_gm3 ,2)~Log2Size, data = NWCnbss) 
+      nwcNBSSint <- coef(NWC_NBSSmodel)[1] 
+      nwcNBSS_slope <- coef(NWC_NBSSmodel)[2]
+      summary(NWC_NBSSmodel) #Rsquared 0.97
+      
+      SCC_NBSSmodel <- lm(log(Norm_Bio_gm3 ,2)~Log2Size, data = SCCnbss) 
+      sccNBSSint <- coef(SCC_NBSSmodel)[1] 
+      sccNBSS_slope <- coef(SCC_NBSSmodel)[2]
+      summary(SCC_NBSSmodel)#Rsquared 0.97
+      
+      SWC_NBSSmodel <- lm(log(Norm_Bio_gm3,2)~Log2Size, data = SWCnbss) 
+      swcNBSSint <- coef(SWC_NBSSmodel)[1] 
+      swcNBSS_slope <- coef(SWC_NBSSmodel)[2]
+      summary(SWC_NBSSmodel) #Rsquared 0.98
+
+nbss.all <-aov(log(Norm_Bio_gm3 ,2)~Log2Size*Water_mass, data = DF6) 
+summary(nbss.all)
+
+# Fit the model, the covariate goes first
+model <- lm(log(Norm_Bio_gm3,2)~Log2Size*Water_mass, data = DF6)
+model.metrics <- augment(model) %>%
+  select(-.hat, -.sigma, -.fitted) # Remove details
+head(model.metrics, 3)
+
+shapiro_test(model.metrics$.resid) # not significant so meets normality. 
+model.metrics %>% levene_test(.resid ~ Water_mass) # meetings HOV
+
+### No Posthoc because interaction not SS. 
+
+```
+
+Stable Isotope Analysis
+```{r}
+
+## Refine data ##
+SIA <- mutate(SIA, Type = if_else(MS != "POM" & MS != "Pyrosomes" & MS != "Zooplankton","fish", MS )) #if sample is a fish set 'type' to fish
+SIA <- (mutate(SIA, WC_mid = (WC_max+WC_min)/2))  #calculate reference point as middle of size class
+SIA <- filter(SIA, WC_max <= 16 | MS == "POM") #  Maximum size class to include | POM has no size class associated with it. |
+
+
+## Set Trophic Level values ##
+
+TEF = 3.4 ## Set a Trophic Enrichment Factor for constant additive Trophic Level TLc
+BaselineTL = 1 ## Set a trophic level for the lowest (baseline) organism (TL = 1 for primary producer)
+
+#Hussey et al (2014) "Rescaled marine food webs" meta analysis coefs.  N.B: Lucas used excel LOG function to calculate 'k' the default LOG base in excel is 10 whilst default in R is natural log. different k value.
+beta1 = -0.27
+beta0 = 5.92
+
+d15N_lim <- (-beta0)/(beta1)   
+k <- -log((beta0-d15N_lim)/(-d15N_lim))
+
+
+
+#filter out only POM values. Set average value of POM as Baseline isotope values for TL calculations within each eddy
+SIAbase <- SIA %>%
+  filter(Group == "POM") %>%
+  dplyr::select(WM, delta15N, d13C_corrected) %>%
+  group_by(WM) %>%
+  summarise(mean15N = mean(delta15N), 
+            mean13C = mean(d13C_corrected))
+
+```
+
+
+Calculating Food Web metrics
+```{r}
+############## ALL FOUR EDDIES metrics #############
+
+Eddies <- count(SIA, WM) ## i for the loop
+Groups <- count(SIA, Group)
+Weight_classes <- count(SIA, WC)
+EddyMetricsTLc<- data.frame()
+EddyMetricsTLs<- data.frame()
+SIA_TL <- data.frame()
+SIA_Summary <- data.frame()
+
+for (i in 1:length(Eddies$WM)) { #for loop to filter and re-calculate metrics for each water mass in your data set
+  
+  eddy <-Eddies$WM[i]   #name of eddy in spot 'i' of the list
+  nSample <- Eddies$n[i]  #Number of samples in the eddy 
+  SIAeddy <- filter(SIA, WM == eddy) #filter out only one eddy at a time
+  
+  
+  ############# SETTING Trophic Level Baseline ################
+  eddybase <- filter(SIAbase, WM == eddy) #set mean pom as baseline
+  BaselineN <- eddybase$mean15N # Set baseline to mean of POM
+  
+  ################ Calculating Trophic Levels #######################################
+  SIAeddy <- mutate(SIAeddy, TLc = (((delta15N-BaselineN)/TEF)+BaselineTL))
+  SIAeddy <- mutate(SIAeddy,TLs = ((log(d15N_lim - BaselineN)-log(d15N_lim - delta15N))/k)+BaselineTL)
+  SIAeddy <- drop_na(SIAeddy, TLs)
+  SIA_TL <- rbind(SIA_TL, SIAeddy)
+  write_csv(SIA_TL, "./Output/Alleddies_SIA_TL.csv")
+  
+  #############Calculating Means ###################
+  SIA_Summ <- SIAeddy %>%
+  #filter(Group != "POM")%>%
+  dplyr::select(delta15N,d13C_corrected,Body_mass, WC,WC_max, WC_mid, TLc, TLs) %>%
+  group_by(WC) %>%
+  summarise( WC_max =mean(WC_max), 
+             WC_mid= mean(WC_mid),
+             WM = eddy, 
+             n = n(),
+             mean13C = mean(d13C_corrected), 
+             sd13C = sd(d13C_corrected),
+             se13C = sd13C/sqrt(n),
+             mean15N = mean(delta15N),
+             sd15N = sd(delta15N), 
+             se15N = sd15N/sqrt(n), 
+             meanBM = mean(Body_mass), 
+             sdBM = sd(Body_mass), 
+             seBM = sdBM/sqrt(n), 
+             meanTLc = mean(TLc),
+             sdTLc = sd(TLc), 
+             seTLc = sdTLc/sqrt(n),
+             meanTLs = mean(TLs),
+             sdTLs = sd(TLs), 
+             seTLs = sdTLs/sqrt(n))
+  SIA_Summary <- rbind(SIA_Summary, SIA_Summ)
+  #rm(SIA_Summ)
+  #SIA_Summary <- drop_na(SIA_Summary, WC)
+  write_csv(SIA_Summary,"./Output/Alleddies_SIA_Summary.csv")
+  
+  
+  ############ Calculating Ecosystem Metrics using scaled enrichment factor ######################
+  
+  model <- lm(TLs~log2(Body_mass), data = SIAeddy) ## TL-BM relationship used to calculate metrics
+  int <- coef(model)[1] #intercept of TL-BM model
+  P <- summary(model)$coefficients[1,4]
+  b <- coef(model)[2]   #slope of TL-BM model
+  Rsquared <- summary(model)$r.squared
+  PPMR = 2^(1/b)                                    #Jennings et al 2002
+  MaxTL = max(SIAeddy$TLs)
+  MinTL = min(SIAeddy$TLs)      #Note: baseline TL = 1 but min may be <1 due to POM variation
+  FCL = (MaxTL - BaselineTL)    # FCL = maximum TL - tl of baseline (i.e: 1)
+  TE = PPMR^(-1.05+0.75)        #Barnes et al 2010   (N.B: -1.05 = assumed 'typical' slope for Abundance Size spectra, 0.75 = rate of consumption scaling with body weight.)
+  metrics <- data.frame(eddy,nSample,P,int,b,Rsquared, MaxTL,MinTL,PPMR, FCL, TE)
+  EddyMetricsTLs <- rbind(EddyMetricsTLs, metrics)
+  write_csv(EddyMetricsTLs, "./Output/AllEddyMetrics_TLs.csv") #Output of ecosystem metrics of all eddies using scaled TL calc
+
+  
+  ############ Calculating Ecosystem Metrics using constant enrichment 15N of 3.4 ######################
+  
+  model <- lm(TLc~log2(Body_mass), data = SIAeddy) 
+  int <- coef(model)[1] 
+  b <- coef(model)[2]
+  P <- summary(model)$coefficients[1,4]
+  Rsquared <- summary(model)$r.squared
+  PPMR = 2^(1/b)
+  MaxTL = max(SIAeddy$TLc)
+  MinTL = min(SIAeddy$TLc)
+  FCL = (MaxTL - BaselineTL)
+  TE = PPMR^(-1.05+0.75)
+  metrics <- data.frame(eddy,nSample,P,int,b,Rsquared, MaxTL,MinTL,PPMR, FCL, TE)
+  EddyMetricsTLc <- rbind(EddyMetricsTLc, metrics)
+  write_csv(EddyMetricsTLc, "./Output/AllEddyMetrics_TLc.csv") #Output of ecosystem metrics of all eddies using constant TL calc
+  rm(metrics)
+  rm(SIAeddy)
+  rm(SIA_Summ)
+}
+
+#TL-BM relatioship plots
+
+SIA_Summary <- mutate(SIA_Summary, Group = if_else(WC_mid >= 0.25, "Fish", "Zooplankton"))  #Make binary group of Fish or Zooplankton
+
+SIA_Summary <- mutate(SIA_Summary, Eddy_type = if_else(WM == "NWC" | WM == "SWC", "Warm Core", "Cold Core")) #define type of eddy
+
+SIA_Summary <- mutate(SIA_Summary, Eddy_location = if_else(WM == "NWC" | WM == "NCC", "North", "South"))%>%  #North/South of tas front
+  mutate(Group = replace_na(Group, "POM")) #groups without a size class are designated POM (since no size for POM was recorded)
+
+```
+
+Figure 8 in Manuscript: TL to body size relationship
+```{r}
+
+head(SIA_Summary)
+
+ 
+SIA_North<-SIA_Summary %>% filter(WM %in% c("NCC", "NWC"))
+SIA_South<-SIA_Summary %>% filter(WM %in% c("SWC", "SCC"))
+
+
+
+TL_BM<-function(data, Eddy_location){  
+  if(Eddy_location== "North"){mycols<- c("navyblue", "orangered2")} 
+  if(Eddy_location== "South"){mycols <- c("navyblue", "orangered2")}
+  
+  
+  data %>% ggplot(aes(log2(WC_mid), meanTLs, col = WM))  +
+      geom_point(aes(shape=WM),#position = position_jitter(width = 0, height = 0), 
+                 size = 2, alpha = 0.7)+
+      scale_colour_manual(values = mycols)+ #c("royalblue3", "orangered2", "navyblue", "red4"))+   #  NCC, NWC, SCC, SWC
+      scale_shape_manual(values = c(16, 17)) +
+      geom_smooth(method = "lm", se = FALSE, linetype ="dashed", aes(Colour = Group),size = 0.5, lwd = 0.5)+
+      geom_smooth(method = lm, se = FALSE, lwd = 0.75)+
+      geom_errorbar(aes(ymin=meanTLs-sdTLs, ymax = meanTLs+sdTLs), width= 0.25)+
+      labs(x = "Log2Body Mass (g)", y= "Trophic Level")+
+      scale_x_continuous(labels = c(-20,-15,-10,-5,0,5), breaks = c(-20,-15,-10,-5,0,5))+
+      #theme_classic()+
+      #facet_grid(~Eddy_location)+
+      xlim(-20, 5)+
+      ylim(1,3.5)#+
+  #geom_hline(yintercept = 2, lty = "dashed", colour = "grey")
+  
+}
+
+
+TL_1<-TL_BM(SIA_North, Eddy_location = "North")+
+  geom_abline(intercept = 2.65, slope = 0.08,linetype ="dashed", colour = "grey")
+TL_2<-TL_BM(SIA_South, Eddy_location = "South")+
+  geom_abline(intercept = 2.65, slope = 0.08,linetype ="dashed", colour = "grey")
+
+
+cowplot::plot_grid(TL_1, 
+          TL_2, 
+          nrow = 2, align = "hv")
+
+```
+
+This figure is not included in the manuscript: Plotting the constant and scaled trophic levels together
+```{r}
+
+names(SIA_Summary) 
+
+#Pulling out the meanTLs and meanTLc to plot against WC_mid. 
+SIA2<-SIA_Summary %>% select(WM, WC_mid, meanTLs, meanTLc)
+  names(SIA2) <-c("WM", "WC_mid", "TLs", "TLc")
+  SIA3 <- SIA2 %>% gather(Method, TL, -c(WM, WC_mid))
+  
+SIA2b<-SIA_Summary %>% select(WM, WC_mid, sdTLs, sdTLc)
+  names(SIA2b) <-c("WM", "WC_mid", "TLs", "TLc")
+  SIA3b <- SIA2b %>% gather(Method, sd, -c(WM, WC_mid))
+
+SIA4<-merge(SIA3, SIA3b, by = c("WM","WC_mid"))
+SIA5<-SIA4 %>% select("WM", "WC_mid", "Method.x", "TL", "sd")
+
+SIA5<-SIA5 %>% unique()
+  
+SIA5 %>% dplyr::group_by("WM", "WC_mid", "Method", "TL") %>%
+  dplyr::summarise(msd=mean(sd, na.rm = TRUE), .groups = "keep")
+
+
+names(SIA5) <- c("WM", "WC_mid", "Method", "TL", 'sd')
+
+SIA_Cold<-SIA5 %>% filter(WM %in% c("NCC", "SCC"))
+SIA_Warm<-SIA5 %>% filter(WM %in% c("NWC", "SWC"))
+
+
+
+TL_BM<-function(data, type){
+  if(type == "cold"){mycols<- c("royalblue3", "navyblue")} 
+  if(type == "warm"){mycols <- c("orangered2", "red4")}
+
+  data %>% ggplot(aes(log2(WC_mid), TL, col = WM)) +
+      geom_point(aes(shape=Method),size = 3, alpha = 0.7)+
+      scale_colour_manual(values = mycols)+ 
+      geom_smooth(method = lm, se = FALSE)+
+      geom_errorbar(aes(ymin=TL-sd, ymax = TL+sd), width= 0.25)+
+      labs(x = "Log2Body Mass (g)", y= "Trophic Level")+
+      xlim(-20, 6)+
+      ylim(1,4.5)
+  
+}
+
+TL_1<-TL_BM(SIA_Warm, type = "warm")+
+  geom_abline(intercept = 2.65, slope = 0.08,linetype ="dashed", colour = "grey")
+TL_2<-TL_BM(SIA_Cold, type = "cold")+
+  geom_abline(intercept = 2.65, slope = 0.08,linetype ="dashed", colour = "grey")
+
+
+cowplot::plot_grid(TL_1, 
+          TL_2, 
+          nrow = 2, align = "hv")
+
+
+
+
+
+```
+
+Summarizing SIA Data for plotting
+```{r}
+##################
+SIA_plot <- read.csv("Alleddies_SIA_TL.csv") 
+SIA_Summary_MS <- SIA_plot %>%
+  #filter(Group != "POM")%>%
+  dplyr::select(WC, WM, MS, delta15N,d13C_corrected,Body_mass, WC_mid,TLc, TLs) %>%
+  group_by(WM, MS) %>%
+  summarise(WC_mid = mean(WC_mid), 
+            n = n(),
+            mean13C = mean(d13C_corrected), 
+            sd13C = sd(d13C_corrected),
+            mean15N = mean(delta15N),
+            sd15N = sd(delta15N), 
+            meanBM = mean(Body_mass), 
+            sdBM = sd(Body_mass),  
+            meanTLc = mean(TLc),
+            sdTLc = sd(TLc),
+            meanTLs = mean(TLs),
+            sdTLs = sd(TLs)) 
+
+SIA_Summary_MSNCC <- SIA_Summary_MS%>%
+  filter(WM == "NCC")
+
+NCC_TL <- dplyr::select(SIA_Summary_MSNCC, WM:MS, meanTLc:sdTLs)
+
+SIA_Summary_MSNWC <- SIA_Summary_MS%>%
+  filter(WM == "NWC")
+
+NWC_TL <- dplyr::select(SIA_Summary_MSNWC, WM:MS, meanTLc:sdTLs)
+
+Eddy_TL<- left_join(NCC_TL,NWC_TL, by = "MS") %>%
+  filter(MS != "Misc" & MS !="POM")
+  #mutate(Group = if_else(MS != "", "Zooplankton", "Fish" ))
+
+  
+SIA_Summary_WC <- SIA_Summary_MS %>% mutate(Group = if_else(WC_mid < 0.024, "Zooplankton", "Fish" ))%>%
+  replace_na(list(Group = "POM"))
+
+SIA_Summary_WC2 <- SIA_plot %>%
+  #filter(Group != "POM")%>%
+  dplyr::select(WC,WM, MS, delta15N,d13C_corrected,Body_mass, WC,WC_mid,TLc, TLs) %>% 
+  mutate(Group = if_else(WC_mid < 0.024, "Zooplankton","Fish"))%>%
+  replace_na(list(Group = "POM")) %>%
+  group_by(WM, WC, Group) %>%
+  summarise(n = n(),mean13C = mean(d13C_corrected), 
+            sd13C = sd(d13C_corrected),mean15N = mean(delta15N),sd15N = sd(delta15N), 
+            meanBM = mean(Body_mass), sdBM = sd(Body_mass),  
+            meanTLc = mean(TLc),sdTLc = sd(TLc),meanTLs = mean(TLs),sdTLs = sd(TLs))
+
+Biplot<- SIA_Summary_MS %>% spread(WM, meanTLs)
+
+
+## Difference in N15 and C13 to POM
+SIA_Summary2_POM    <- SIA_Summary_MS %>% filter(MS == "POM") 
+SIA_Summary2_POMNCC <- SIA_Summary2_POM %>% filter(WM == "NCC")
+SIA_Summary2_POMNWC <- SIA_Summary2_POM %>% filter(WM == "NWC")
+
+SIA_Summary2_MS <- SIA_Summary_MS %>% 
+  mutate(Delta15N = if_else(WM == "NCC", mean15N - SIA_Summary2_POMNCC$mean15N,mean15N - SIA_Summary2_POMNWC$mean15N))
+SIA_Summary2_MS <- SIA_Summary2_MS %>%
+ mutate(Delta13C = if_else(WM == "NCC", mean13C - SIA_Summary2_POMNCC$mean13C,mean13C - SIA_Summary2_POMNWC$mean13C)) %>% 
+  filter(MS != "Misc")
+
+
+SIA_Summary_WC <- SIA_plot %>%
+  #filter(Group != "POM")%>%
+  dplyr::select(WM, MS, delta15N,d13C_corrected,Body_mass, WC,WC_mid,TLc, TLs) %>%
+  group_by(WM, WC) %>%
+  summarise(WC_mid = mean(WC_mid), n = n(),
+            mean13C = mean(d13C_corrected), 
+            sd13C = sd(d13C_corrected),
+            mean15N = mean(delta15N),
+            sd15N = sd(delta15N), 
+            meanBM = mean(Body_mass), 
+            sdBM = sd(Body_mass),  
+            meanTLc = mean(TLc),
+            sdTLc = sd(TLc),
+            meanTLs = mean(TLs),sdTLs = sd(TLs))
+
+SIA_Summary_WC <- SIA_Summary_WC %>%
+ mutate(Delta15N = if_else(WM == "NCC", mean15N - SIA_Summary2_POMNCC$mean15N,mean15N - SIA_Summary2_POMNWC$mean15N))
+SIA_Summary_WC <- SIA_Summary_WC %>%
+ mutate(Delta13C = if_else(WM == "NCC", mean13C - SIA_Summary2_POMNCC$mean13C,mean13C - SIA_Summary2_POMNWC$mean13C))
+SIA_Summary_WC<-SIA_Summary_WC%>%
+   mutate(Group = if_else(WC_mid <0.2, "Zooplankton", "Fish" ))
+
+
+```
+
+Figure 7: N and C by body-size
+```{r}
+
+## 15N v size-class (midpoint)
+pN15<-ggplot(data = SIA_Summary_WC, aes(x = log(WC_mid,2), y = mean15N, fill = WM))+ 
+  geom_errorbar(aes(ymin=mean15N-sd15N, ymax = mean15N+sd15N, col = WM, width = 0.25), alpha = 0.75)+
+  #geom_errorbarh(aes(xmin=mean13C-sd13C, xmax = mean13C+sd13C),col = "Black", alpha = 0.5)+
+  geom_point(aes(shape = Group,colour = WM), size = 2.5, alpha = 0.75)+
+  #geom_text(aes(label= WC),hjust= -0.5, vjust=0.5, size = 2)+
+  #scale_shape_manual(values=c(21,22,23,24,25,3))+
+  geom_smooth( method = lm, se= FALSE, aes(colour = WM, alpha = 0.75))+
+ # geom_abline(intercept = 0, slope = 1,linetype ="dashed")+
+  scale_colour_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  scale_fill_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  labs(x = "log2 (body Size)", y = expression(delta*"15N")) +
+  theme_classic()
+
+
+#ggsave("./Output/SIAfinal/ALL4_15n-wc.png")
+
+#### ALL 4 13C v size-class (midpoint) ####
+pC13<-ggplot(data = SIA_Summary_WC, aes(x = log(WC_mid,2), y = mean13C, fill = WM))+ 
+  geom_errorbar(aes(ymin=mean13C-sd13C, ymax = mean13C+sd13C, col = WM, width = 0.25), alpha = 0.75)+
+  #geom_errorbarh(aes(xmin=mean13C-sd13C, xmax = mean13C+sd13C),col = "Black", alpha = 0.5)+
+  geom_point(aes(shape = Group, colour = WM), size = 2.5, alpha = 0.75)+
+  #geom_text(aes(label= WC),hjust= -0.5, vjust=0.5, size = 2)+
+  #scale_shape_manual(values=c(21,22,23,24,25,3))+
+  geom_smooth( method = lm, se= FALSE, aes(colour = WM, alpha = 0.75))+
+  scale_colour_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  scale_fill_manual(values = c("royalblue3", "orangered2", "navyblue", "red4"))+
+  labs(x = "log2 (body Size)", y = expression(delta*"13C")) +
+  theme_classic()
+#ggsave("./Output/SIAfinal/All4_13c_wc.png")
+
+cowplot::plot_grid(pN15, pC13, nrow = 1, align = "h")
+
+```
+
+Figure 6: N:C
+```{r}
+###Data manipulation
+SIA_plot <- read.csv("Alleddies_SIA_TL.csv") 
+
+SIA_Summary_MS <- SIA_plot %>%
+  #filter(Group != "POM")%>%
+  dplyr::select(WC, WM, MS, delta15N,d13C_corrected,Body_mass, WC_mid,TLc, TLs) %>%
+  group_by(WM, MS) %>%
+  summarise(WC_mid = mean(WC_mid), 
+            n = n(),
+            mean13C = mean(d13C_corrected), 
+            sd13C = sd(d13C_corrected),
+            mean15N = mean(delta15N),
+            sd15N = sd(delta15N), 
+            meanBM = mean(Body_mass), 
+            sdBM = sd(Body_mass),  
+            meanTLc = mean(TLc),
+            sdTLc = sd(TLc),
+            meanTLs = mean(TLs),
+            sdTLs = sd(TLs)) 
+
+SIA_Summary_WC2 <- SIA_plot %>%
+  #filter(Group != "POM")%>%
+  dplyr::select(WC,WM, MS, delta15N,d13C_corrected,Body_mass, WC,WC_mid,TLc, TLs) %>% 
+  mutate(Group = if_else(WC_mid < 0.024, "Zooplankton","Fish"))%>%
+  replace_na(list(Group = "POM")) %>%
+  group_by(WM, WC, Group) %>%
+  summarise(n = n(),mean13C = mean(d13C_corrected), sd13C = sd(d13C_corrected),mean15N = mean(delta15N),sd15N = sd(delta15N), meanBM = mean(Body_mass), sdBM = sd(Body_mass),  meanTLc = mean(TLc),sdTLc = sd(TLc),meanTLs = mean(TLs),sdTLs = sd(TLs))
+
+
+
+SIA_NCC<-SIA_Summary_WC2 %>% filter(WM == "NCC")
+SIA_NWC<-SIA_Summary_WC2 %>% filter(WM == "NWC")
+SIA_SCC<-SIA_Summary_WC2 %>% filter(WM == "SCC")
+SIA_SWC<-SIA_Summary_WC2 %>% filter(WM == "SWC")
+
+#Plotting function:
+plot_func<-function(data, label){
+  data %>% ggplot(aes(x = mean13C, y = mean15N, colour = Group, fill = Group)) +
+      geom_point(aes(shape = Group), size = 2, alpha = 0.75)+
+      geom_errorbar(aes(ymin=mean15N-sd15N, ymax = mean15N+sd15N),col = "Black", alpha = 0.5)+
+      geom_errorbarh(aes(xmin=mean13C-sd13C, xmax = mean13C+sd13C),col = "Black", alpha = 0.5)+
+      scale_shape_manual(values = c(16, 17, 15)) +
+      scale_color_manual(values = c("navyblue","#2D6431", "orangered2"))+
+      scale_fill_manual(values = c("navyblue","#2D6431", "orangered2"))+
+      labs(x = expression(delta*"13C"), y = expression(delta*"15N")) +
+    scale_y_continuous(limits=c(-0.5,15))+
+    scale_x_continuous(limits=c(-23,-18)) +
+    labs(subtitle = paste(label)) + 
+    geom_abline(intercept = 84, slope = 3.78, lty = "dashed") ##May need to change the slope here to reflect the trophic enrichment
+}
+
+
+
+p1<-plot_func(SIA_NWC, label = "NWC")+
+    theme(legend.position = "none")
+p2<-plot_func(SIA_NCC, label = "NCC")+
+    theme(legend.position = "none")
+p3<-plot_func(SIA_SWC, label = "SWC")+
+    theme(legend.position = "none")
+p4<-plot_func(SIA_SCC, label = "SCC")+
+    theme(legend.position = "none")
+leg<- SIA_NWC %>% ggplot(aes(x = mean13C, y = mean15N, colour = Group, fill = Group)) +
+      geom_point(aes(shape = Group), size = 2, alpha = 0.75)+
+      scale_shape_manual(values = c(16, 17, 15)) +
+      scale_color_manual(values = c("navyblue","#2D6431", "orangered2"))+
+      scale_fill_manual(values = c("navyblue","#2D6431", "orangered2")) +
+  theme(legend.title = element_blank())
+
+legend.plot<-get_legend(leg)
+
+
+pComb<-cowplot::plot_grid(p1,p2,p3,p4, ncol = 2, nrow=2, align ="hv")
+
+cowplot::plot_grid(pComb, legend.plot, ncol= 2,
+  rel_widths = c(0.8, 0.2))
+
+```
+
+
+Figure 9
+```{r}
+## SIA Summary
+SIA_comp<-read.csv("Alleddies_SIA_TL.csv")
+
+head(SIA_comp)
+
+SIA_comp <- SIA_comp %>% filter(MS != "Pyrosomes")
+
+mutate(SIA_Summary, Eddy_type = if_else(WM == "NWC" | WM == "SWC", "Warm Core", "Cold Core")) 
+
+SIA_comp2 <- mutate(SIA_comp, TAX = if_else(MS =="Other" | MS == "Myctophidae" | MS == "Sternoptychidae" | MS == "Stomiidae", "Fish", 
+                                            if_else(MS == "POM", "POM", "Zooplankton")))
+
+SIA_comp2$TAX <- factor(SIA_comp2$TAX, levels = c("POM", "Zooplankton", "Fish"))
+
+
+pN<-SIA_comp2 %>% ggplot(aes(TAX, delta15N, fill = WM)) + 
+  geom_boxplot(position = position_dodge())+
+  ylab("d15N") +
+  scale_fill_manual(values = c("NCC" = "#98E2FF", 
+                                "NWC" = "#DFA5A5", 
+                                "SCC" = "#00587A",
+                                "SWC" = "#973636")) +
+  theme(legend.position = "bottom")
+
+
+pC<-SIA_comp2 %>% ggplot(aes(TAX, d13C_corrected, fill = WM)) + 
+  geom_boxplot(position = position_dodge()) +
+  ylab("d13C")+
+  scale_fill_manual(values = c("NCC" = "#98E2FF", 
+                               "NWC" = "#DFA5A5", 
+                               "SCC" = "#00587A",
+                               "SWC" = "#973636"))+
+  theme(legend.position = "bottom")
+
+pTL<-SIA_comp2 %>% ggplot(aes(TAX, TLs, fill = WM)) + 
+  geom_boxplot( position = position_dodge())+
+  ylab("Trophic Level")+
+  scale_fill_manual(values = c("NCC" = "#98E2FF", 
+                               "NWC" = "#DFA5A5", 
+                               "SCC" = "#00587A",
+                               "SWC" = "#973636"))+
+  theme(legend.position = "bottom")
+
+```
+
+Summary of TL to body size relationship in individual eddies. 
+```{r}
+#mean 15N and 13C of each SizeClass
+#use summarise function,Then ANOVA of N15 per size class, Then linear regression of all size structure slopes, then ANCOVA of All slopes
+
+SIA      <-  read_csv("Alleddies_SIA_TL.csv") %>% filter(Group != "Pyro")
+SIA_Fish <- filter(SIA, Group !="POM"& Group !="Pyro" & Group !="Zoo")
+SIA_Zoo  <- filter(SIA, Group == "Zoo")
+SIA_ALL  <- SIA
+
+Tests   <- c("All", "Fish", "Zooplankton")
+Eddies  <- count(SIA, WM) ## j for the loop
+metrics <- vector(mode = "list", length = length(Tests))
+se      <- NA
+f       <- NA
+
+
+##This function can be revised to us TLc as well, for the comparison of the two approaches (appendix). 
+FWMets <- function(DF){
+  DF <- DF
+    for (i in 1:nrow(Eddies)) {
+    eddy[i]     <- Eddies$WM[i] 
+    SIAeddy     <- filter(DF, WM == eddy[i])
+    nSample[i]  <- nrow(SIAeddy) 
+      
+    model <- lm(TLs~log2(Body_mass), data = SIAeddy)  # For TLc we would change TLs to TLc in this line
+    se[i] <- summary(model)$coefficients[2, "Std. Error"]
+    f[i]  <- summary(model)$fstatistic[1]
+    int[i] <- coef(model)[1] 
+    b[i] <- coef(model)[2]
+    P[i] <- summary(model)$coefficients[1,4]
+    Rsquared[i] <- summary(model)$r.squared
+    PPMR[i] = 2^(1/b[i])
+    MaxTL[i] = max(SIAeddy$TLs) # For TLc we would change TLs to TLc in this line
+    MinTL[i] = min(SIAeddy$TLs) # For TLc we would change TLs to TLc in this line
+    FCL[i] = (MaxTL[i] - BaselineTL)
+    TE[i] = PPMR[i]^(-1.05+0.75)
+    metrics[[i]] <- data.frame(nSample[i],eddy[i],P[i],int[i],b[i],Rsquared[i],se[i], f[i], MaxTL[i],MinTL[i],PPMR[i], FCL[i], TE[i])
+    }
+  
+  return(data.frame(t(sapply(metrics,c))))
+}
+
+#Run the function to get the output for each 'group' i.e., All, Fish, Zoo
+FWMets(SIA_Zoo) # two extra samples for NCC and NWC zoops
+FWMets(SIA_Fish) # returning 1 fewer sample for the SCC and SWC
+FWMets(SIA)
+
+#Summary table of SIA data (Appendix)
+SIA_summary3 <- SIA %>% group_by(WM, MS,  WC) %>% count() %>% spread(WM, n)
+
+```
+
+Differences in mean 15N and 13C across water masses, by group (i.e., fish, zoop, all)
+```{r}
+#### ANOVA ####
+
+SIA <-  read.csv("Alleddies_SIA_TL.csv") 
+
+#Compare POM 
+POM<-SIA %>% filter(Group == "POM")
+  AOVPOM<-aov(delta15N~WM, data = POM)
+  levene_test(AOVPOM)
+  shapiro_test(delta15N, data = POM)
+  TukeyHSD(AOVPOM)
+  
+HSD <- HSD.test(AOVPOM, "WM")
+tukeys15N <- HSD$means[1:5]
+POMn = summary(AOVPOM)$coefficients[1,4]
+tukeysgroup <- HSD$groups
+tukeys <- left_join(tukeys15N, tukeysgroup)
+
+## Refine data to use for loop below and remove size classes with few samples ##
+SIA <- SIA %>%
+  #filter(WM == "SCC") %>%
+  mutate(Type = if_else(MS != "POM" & MS != "Pyrosomes" & MS != "Zooplankton","fish", MS )) %>%
+  filter(WC_max <= 16 | MS == "POM" | MS == "Pyrosomes")
+
+#Set targets for ANOVA test in FOR loop Note: these are all of the MS groupings based on FAMILY, + 'ALL' and 'FISH' 
+Tests <- c("All", "Fish", "Zooplankton")
+
+## For loop to filter out each of the separate groups
+
+
+for (i in 1:length(Tests)) {
+#FOR each target group  
+#i <- 
+if(Tests[i] == "All"){
+  #If target is  ALL, use whole data set, else, filter out only samples within the target group
+model.dat <- SIA
+} else {
+if(Tests[i] == "Fish"){
+  model.dat <- filter(SIA, Type =="fish")
+} else {
+if (Tests[i] == "Zooplankton") {
+    model.dat <- filter(SIA, MS == Tests[i])
+}}}
+
+  Anov.out <- data.frame()#WM = c("NCC","NWC","SCC","SWC")
+  WM <- Eddies$WM   
+  
+  #Run anova with Tukeys(if using more than 2 eddies)
+  AOV15N <-aov(log10(delta15N)~WM, data = model.dat)
+    TukeyHSD(AOV15N)
+    levene_test(AOV15N)
+    shapiro_test(delta15N, data = model.dat)
+
+    HSD <- HSD.test(AOV15N, "WM")
+    tukeys15N <- HSD$means[1:5]
+    P15n = summary(AOV15N)$coefficients[1,4]
+    tukeysgroup <- HSD$groups
+    tukeys <- cbind(tukeysgroup,tukeys15N)
+    
+  AOV13C <-aov(d13C_corrected~WM, data = model.dat)
+      TukeyHSD(AOV13C)
+      levene_test(AOV13C)
+      shapiro_test(d13C_corrected, data = model.dat)
+    
+      HSDc <- HSD.test(AOV13C, "WM")
+      tukeys13C <- HSDc$means[1:5]
+      P13c = summary(AOV13C)$coefficients[1,4]
+      tukeysgroupc <- HSDc$groups
+      tukeysc <- cbind(tukeys13C, tukeysgroupc)
+      Anov.out <- cbind(WM, tukeys, tukeysc)
+      names(Anov.out) <- c("WM", "delta15N", "groups",  "delta15N", "std15N", "r15N", "se15N", "Min15N",
+                           "d13C_corrected", "std13C", "r13C", "se13C", "Min13C", "d13C_corrected","groups")
+
+# Write a separate .csv file for the current target group displaying the 15N and 13C ANOVA results within each WM 
+write_csv(Anov.out, paste0("./Output/Anovas/", Sys.Date(), Tests[i],"_aovHSD1.csv"))
+# end of loop: repeat with next target group  
+}
+
+
+
+
+## SIA of the whole community, violates the parametric assumptions - perform kruskal wallis and wilcox post hoc instead, 
+  #Run anova with Tukeys(if using more than 2 eddies)
+kruskal.test(delta15N~WM, data = SIA)
+pairwise.wilcox.test(SIA$delta15N, SIA$WM, p.adjust.method = "BH")
+
+kruskal.test(d13C_corrected~WM, data = SIA)
+pairwise.wilcox.test(SIA$d13C_corrected, SIA$WM, p.adjust.method = "BH")
+
+```
+
+Trophic Level ANCOVAS
+```{r}
+####ANCOVA####
+SIA <-  read_csv("Alleddies_SIA_TL.csv") %>%
+  filter(WC_max <= 32) %>%
+  filter(MS != "Pyrosomes") %>% #Pulled in the POM as well. 
+  #filter(WM != "SCC" & WM != "SWC") %>%
+  mutate(log2_bodysize = log2(WC_mid)) %>%
+  mutate(log2_bodysize_corr = log2_bodysize + abs(min(log2_bodysize)))
+
+Anc <- aov(TLs~log2_bodysize_corr * WM, data = SIA)
+  summary(Anc)
+  TukeyHSD(Anc, which = "WM")
+
+Anc <- aov(TLs~log2_bodysize_corr+WM, data = SIA)
+  summary(Anc)
+
+All_anc <- lm(TLs~log(Body_mass,2)*WM, data = SIA)  ## All zoo and fish
+  summary(All_anc)
+  tidy(All_anc)
+  plot(All_anc)
+
+ZooTL<-SIA %>% filter(Group == "Zoo")#>% filter(WM == "NCC")
+
+Anc <- aov(TLs~log2_bodysize_corr*WM, data = ZooTL)
+  summary(Anc)
+  TukeyHSD(Anc, which = "WM")
+
+```
+
+Look at whether there is a difference in the 15N and 13C ~ body weight relationship across eddies. ANCOVAs
+```{r}
+SIA <- read_csv("./Data/Alleddies_SIA_TL.csv") %>%
+  #filter(WM == "SCC") %>%
+  mutate(Type = if_else(MS != "POM" & MS != "Pyrosomes" & MS != "Zooplankton","fish", MS )) %>%
+  filter(WC_max <= 16 | MS == "POM" | MS == "Pyrosomes")
+
+AOV15N <-aov(delta15N~WC_mid*WM, data = SIA)
+  summary(AOV15N)
+  TukeyHSD(AOV15N, which = "WM")
+
+AOV15N <-aov(delta15N~WC_mid+WM, data = SIA)
+  summary(AOV15N)
+
+AOV13C <-aov(d13C_corrected~WC_mid*WM, data = SIA)
+  summary(AOV13C)
+  TukeyHSD(AOV13C, which = "WM")
+
+AOV13C <-aov(d13C_corrected~WC_mid+WM, data = SIA)
+  summary(AOV13C)
+
+```
+
+
+##### DATA SUMMARIES FOR TABLES
+
+Data summaries for SIA (Table S-11)
+```{r}
+SIA      <-  read_csv("Alleddies_SIA_TL.csv") %>% filter(Group != "Pyro")
+
+SIA_Fish <- filter(SIA, Group !="POM"& Group !="Pyro" & Group !="Zoo")
+SIA_Zoo  <- filter(SIA, Group == "Zoo")
+SIA_POM  <- filter(SIA, Group == "POM")
+
+
+SIA_POM %>% group_by(WM)%>% 
+  summarise(mean_d15N = mean(delta15N, na.rm = TRUE),
+            se_D15N = sd(delta15N, na.rm = TRUE),
+            min_d15N = min(delta15N, na.rm = TRUE),
+            max_dN15 = max(delta15N, na.rm = TRUE),
+            mean_d13Cc = mean(d13C_corrected, na.rm = TRUE),
+            se_d13Cc = sd(d13C_corrected, na.rm = TRUE),
+            min_d13Cc = min(d13C_corrected, na.rm = TRUE),
+            max_d13Cc = max(d13C_corrected, na.rm = TRUE),
+            mean_TL = mean(TLs, na.rm = TRUE),
+            se_TL = sd(TLs, na.rm = TRUE),
+            min_TL = min(TLs, na.rm = TRUE),
+            max_TL = max(TLs, na.rm = TRUE))
+
+SIA_Zoo %>% group_by(WM)%>% 
+  summarise(mean_d15N = mean(delta15N, na.rm = TRUE),
+            se_D15N = sd(delta15N, na.rm = TRUE),
+            min_d15N = min(delta15N, na.rm = TRUE),
+            max_dN15 = max(delta15N, na.rm = TRUE),
+            mean_d13Cc = mean(d13C_corrected, na.rm = TRUE),
+            se_d13Cc = sd(d13C_corrected, na.rm = TRUE),
+            min_d13Cc = min(d13C_corrected, na.rm = TRUE),
+            max_d13Cc = max(d13C_corrected, na.rm = TRUE),
+            mean_TL = mean(TLs, na.rm = TRUE),
+            se_TL = sd(TLs, na.rm = TRUE),
+            min_TL = min(TLs, na.rm = TRUE),
+            max_TL = max(TLs, na.rm = TRUE))
+
+SIA_Fish %>% group_by(WM)%>% 
+  summarise(mean_d15N = mean(delta15N, na.rm = TRUE),
+            se_D15N = sd(delta15N, na.rm = TRUE),
+            min_d15N = min(delta15N, na.rm = TRUE),
+            max_dN15 = max(delta15N, na.rm = TRUE),
+            mean_d13Cc = mean(d13C_corrected, na.rm = TRUE),
+            se_d13Cc = sd(d13C_corrected, na.rm = TRUE),
+            min_d13Cc = min(d13C_corrected, na.rm = TRUE),
+            max_d13Cc = max(d13C_corrected, na.rm = TRUE),
+            mean_TL = mean(TLs, na.rm = TRUE),
+            se_TL = sd(TLs, na.rm = TRUE),
+            min_TL = min(TLs, na.rm = TRUE),
+            max_TL = max(TLs, na.rm = TRUE))
+
+SIA %>% group_by(WM)%>% 
+  summarise(mean_d15N = mean(delta15N, na.rm = TRUE),
+            se_D15N = sd(delta15N, na.rm = TRUE),
+            min_d15N = min(delta15N, na.rm = TRUE),
+            max_dN15 = max(delta15N, na.rm = TRUE),
+            mean_d13Cc = mean(d13C_corrected, na.rm = TRUE),
+            se_d13Cc = sd(d13C_corrected, na.rm = TRUE),
+            min_d13Cc = min(d13C_corrected, na.rm = TRUE),
+            max_d13Cc = max(d13C_corrected, na.rm = TRUE),
+            mean_TL = mean(TLs, na.rm = TRUE),
+            se_TL = sd(TLs, na.rm = TRUE),
+            min_TL = min(TLs, na.rm = TRUE),
+            max_TL = max(TLs, na.rm = TRUE))
+
+
+```
+
+## Summary of fish SIA
+```{r}
+SIA %>%
+  dplyr::select(MS, WM, WC) %>%
+  group_by(MS, WC,WM) %>%
+  summarise(n=n()) %>% 
+  spread( WM, n)
+
+```
+
+
